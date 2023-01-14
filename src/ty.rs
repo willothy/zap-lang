@@ -7,6 +7,11 @@ pub enum Type {
     Primitive(PrimitiveType),
     /// The pointer type represents a pointer to another type.
     Pointer(Box<Type>),
+    /// The function type represents a function with a list of parameters and a return type.
+    Function {
+        parameters: Vec<Type>,
+        return_type: Box<Type>,
+    },
     /// The array type represents an array of a certain size and type.
     Array {
         size: usize,
@@ -24,11 +29,12 @@ pub enum Type {
 impl Type {
     pub fn size(&self) -> usize {
         match self {
+            Type::Function { .. } => panic!("Function type has no size"),
             Type::Primitive(p) => p.size(),
             Type::Pointer(_) => 8,
             Type::Array { size, element_type } => size * element_type.size(),
             Type::Struct { fields, .. } => fields.iter().map(|(_, t)| t.size()).sum(),
-            Type::Enum { variants, .. } => variants.len(),
+            Type::Enum { .. } => 8,
         }
     }
 }

@@ -346,14 +346,56 @@ impl<'gen> Generator<'gen> {
                     };
 
                     self.builder.insert_many(vec![
+                        // Push the base pointer
                         asm!("push", "rbp"),
+                        // Set the base pointer to the stack pointer
                         asm!("mov", "rbp", "rsp"),
-                        //asm!("sub", "rsp", 0),
                     ]);
+
+                    self.builder.set_insert_point(InsertPoint {
+                        segment: SegmentKind::Text,
+                        loc: InsertLoc::SegmentEnd,
+                    });
+
+                    // Temp label to insert the stack size
+                    self.builder.insert_label("tmp_for_stack_size");
 
                     for statement in body {
                         self.statement(statement, &mut block_scope);
                     }
+
+                    let insert = self.builder.get_insert_point();
+                    let locals_size: usize =
+                        block_scope.locals.iter().map(|(_, v)| v.ty.size()).sum();
+                    self.builder.set_insert_point(InsertPoint {
+                        segment: SegmentKind::Text,
+                        loc: InsertLoc::LabelStart("tmp_for_stack_size".into()),
+                    });
+
+                    self.builder.insert(asm!("sub", "rsp", locals_size));
+                    self.builder.delete_label("tmp_for_stack_size");
+
+                    let mut ret_blocks = self.builder.blocks_mut(|b| {
+                        if let Some(label) = &b.label {
+                            label.name.starts_with("tmp_return_block")
+                        } else {
+                            false
+                        }
+                    });
+
+                    let mut ret_block;
+                    loop {
+                        if let Some(next) = ret_blocks.pop() {
+                            ret_block = next;
+                        } else {
+                            break;
+                        }
+
+                        ret_block.code.insert(0, asm!("add", "rsp", locals_size));
+                        ret_block.label = None;
+                    }
+
+                    self.builder.set_insert_point(insert);
                 }
                 Extern {
                     name,
@@ -516,13 +558,15 @@ impl<'gen> Generator<'gen> {
                     ));
                 }
 
-                //let locals_size: usize = scope.locals.iter().map(|(_, v)| v.ty.size()).sum();
-
-                self.builder.insert_many(vec![
-                    //asm!("add", "rsp", locals_size),
-                    asm!("pop", "rbp"),
-                    asm!("ret"),
-                ]);
+                // Create a label to return to once the size of all locals is known
+                let id = self.next_block_id(Some("tmp_return_block"));
+                self.builder.set_insert_point(InsertPoint {
+                    segment: SegmentKind::Text,
+                    loc: InsertLoc::SegmentEnd,
+                });
+                self.builder.insert_label(&id);
+                self.builder
+                    .insert_many(vec![asm!("pop", "rbp"), asm!("ret")]);
             }
             tir::Statement::Expression(_) => todo!(),
             tir::Statement::VariableDeclaration {
@@ -606,7 +650,7 @@ impl<'gen> Generator<'gen> {
                                     format!("{} [rbp - {}]", asm_size(size), var_offset),
                                     tmp_reg.sized(size)
                                 ),
-                                asm!("pop", tmp_reg),
+                                asm!("pop", tmp_reg.sized(size)),
                             ]);
                             self.free_register(tmp_reg);
                         }

@@ -1,13 +1,10 @@
 //! Asm builder
 
-use std::{fs, path::PathBuf};
+use std::{fs, iter::Filter, path::PathBuf, vec::IntoIter};
 
 /// Macro helper to format asm instructions
 #[macro_export]
 macro_rules! asm {
-    ($inst:expr, $arg1:expr, $arg2:expr, $arg3:expr) => {
-        format!("    {:<8}{}, {}, {}\n", $inst, $arg1, $arg2, $arg3)
-    };
     ($inst:expr, $arg1:expr, $arg2:expr) => {
         format!("    {:<8}{}, {}\n", $inst, $arg1, $arg2)
     };
@@ -61,6 +58,39 @@ impl Builder {
     /// Sets the insert point to the given location
     pub fn set_insert_point(&mut self, insert_point: InsertPoint) {
         self.insert_point = insert_point;
+    }
+
+    /// Delete the matching label from the current segment
+    /// Panics if the label is not found
+    pub fn delete_label(&mut self, label: &str) {
+        let segment = match self.insert_point.segment {
+            SegmentKind::Bss => &mut self.bss,
+            SegmentKind::Text => &mut self.text,
+            SegmentKind::Data => &mut self.data,
+        };
+
+        let mut found = false;
+        segment.blocks.iter_mut().for_each(|b| {
+            if let Some(blk_label) = &b.label {
+                if blk_label.name == label {
+                    b.label = None;
+                    found = true;
+                }
+            }
+        });
+        if !found {
+            panic!("Label not found: {}", label);
+        }
+    }
+
+    pub fn blocks_mut(&mut self, mut p: impl FnMut(&Block) -> bool) -> Vec<&mut Block> {
+        let segment = match self.insert_point.segment {
+            SegmentKind::Bss => &mut self.bss,
+            SegmentKind::Text => &mut self.text,
+            SegmentKind::Data => &mut self.data,
+        };
+
+        segment.blocks.iter_mut().filter(|b| p(b)).collect()
     }
 
     /// Add a label at the current insert point
