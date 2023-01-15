@@ -2,21 +2,18 @@
 
 use std::fmt::Display;
 
-use crate::{
-    asm,
-    ops::BinaryOperator,
-    tir::{self, Expression, Literal, Unit},
-    ty::Type,
-};
+use crate::{tir::Unit, ty::Type};
 
 use super::builder::{Builder, InsertLoc, InsertPoint, SegmentKind};
 
 /// References a name in local or global scope.
 /// Keeps track of name, type, and location (register, stack w/ offset, etc.)
+#[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
     pub ty: Type,
     pub location: VariableLocation,
+    pub is_arg: bool,
 }
 
 /// Represents the location of a variable.
@@ -25,14 +22,21 @@ pub enum VariableLocation {
     /// The register (for function parameters)
     Register(Register),
     /// The offset from the base pointer.
-    Stack(usize),
+    Stack(isize),
 }
 
 impl VariableLocation {
     pub fn to_asm(&self, size: usize) -> String {
         match self {
             VariableLocation::Register(reg) => reg.sized(size),
-            VariableLocation::Stack(offset) => format!("{} [rbp - {}]", asm_size(size), offset),
+            VariableLocation::Stack(offset) => {
+                let offset = *offset;
+                if offset > 0 {
+                    format!("{} [rbp - {}]", asm_size(size), offset)
+                } else {
+                    format!("{} [rbp + {}]", asm_size(size), -offset)
+                }
+            }
         }
     }
 }
@@ -70,6 +74,22 @@ pub fn asm_size(size: usize) -> String {
 }
 
 impl Register {
+    /// Returns the register formatted as a deref
+    /// (e.g. Rax -> [rax])
+    pub fn deref(&self) -> String {
+        format!("[{}]", self.sized(8))
+    }
+
+    /// Returns the register formatted as a deref with an offset
+    /// (e.g. Rax -> [rax + n])
+    pub fn deref_offset(&self, offset: isize) -> String {
+        if offset > 0 {
+            format!("[{} + {}]", self.sized(8), offset)
+        } else {
+            format!("[{} - {}]", self.sized(8), -offset)
+        }
+    }
+
     /// Returns the register name for the given size.
     pub fn sized(&self, size: usize) -> String {
         match self {
@@ -214,41 +234,47 @@ impl Display for Register {
 }
 
 /// Keeps track of variables within a scope
-pub struct BlockScope<'gen> {
+pub struct BlockScope {
     pub locals: Vec<(String, Variable)>,
-    pub globals: Vec<(String, &'gen Variable)>,
+    pub globals: Vec<(String, Variable)>,
+    pub stack_args_size: usize,
 }
 
-impl<'gen> BlockScope<'gen> {
-    pub fn new() -> Self {
-        Self {
-            locals: Vec::new(),
-            globals: Vec::new(),
-        }
-    }
-
-    pub fn from_parent(parent: &'gen BlockScope<'gen>) -> Self {
+impl BlockScope {
+    pub fn make_inner(&self) -> BlockScope {
         Self {
             locals: Vec::new(),
             globals: {
                 let mut globals = Vec::new();
-                for (name, var) in parent.locals.iter() {
-                    globals.push((name.clone(), var));
+                for (name, var) in self.locals.iter() {
+                    globals.push((name.clone(), var.clone()));
                 }
-                for (name, var) in parent.globals.iter() {
-                    globals.push((name.clone(), var));
+                for (name, var) in self.globals.iter() {
+                    globals.push((name.clone(), var.clone()));
                 }
                 globals
             },
+            stack_args_size: self.stack_args_size,
         }
     }
 
-    pub fn cleanup(&mut self, gen: &mut Generator<'gen>) {
-        self.locals.iter().for_each(|(_, var)| {
-            if let VariableLocation::Register(reg) = var.location {
-                gen.free_register(reg);
-            }
-        });
+    pub fn from_params(params: Vec<(String, Variable)>) -> Self {
+        Self {
+            locals: params,
+            globals: Vec::new(),
+            stack_args_size: 0,
+        }
+    }
+
+    fn locals_size(&self) -> usize {
+        self.locals
+            .iter()
+            .map(|(_, var)| if var.is_arg { 0 } else { var.ty.size() })
+            .sum()
+    }
+
+    pub fn fn_locals_size(&self) -> usize {
+        self.locals_size() + self.stack_args_size
     }
 }
 
@@ -296,124 +322,8 @@ impl<'gen> Generator<'gen> {
         self.functions();
     }
 
-    /// Generates the assembly for all functions in the unit
-    pub fn functions(&mut self) {
-        let functions: Vec<tir::Function> = self.unit.functions.drain(..).collect();
-        for function in functions {
-            use tir::Function::*;
-            match function {
-                Definition {
-                    name,
-                    return_type: _,
-                    params,
-                    body,
-                } => {
-                    self.builder.set_insert_point(InsertPoint {
-                        segment: SegmentKind::Text,
-                        loc: InsertLoc::SegmentEnd,
-                    });
-                    self.builder.insert_label(&name);
-                    self.builder.set_insert_point(InsertPoint {
-                        segment: SegmentKind::Text,
-                        loc: InsertLoc::LabelEnd(name.clone()),
-                    });
-
-                    // Function params passed in registers rdi, rsi, rdx, rcx, r8, r9 and the rest on the stack
-                    let mut gen_params = Vec::new();
-                    for (idx, (name, ty)) in params.iter().enumerate() {
-                        let param = Variable {
-                            name: name.clone(),
-                            ty: ty.clone(),
-                            location: {
-                                use Register::*;
-                                match idx {
-                                    0 => VariableLocation::Register(Rdi),
-                                    1 => VariableLocation::Register(Rsi),
-                                    2 => VariableLocation::Register(Rdx),
-                                    3 => VariableLocation::Register(Rcx),
-                                    4 => VariableLocation::Register(R8),
-                                    5 => VariableLocation::Register(R9),
-                                    _ => VariableLocation::Stack((idx - 6) * 8),
-                                }
-                            },
-                        };
-                        gen_params.push((param.name.clone(), param));
-                    }
-
-                    let mut block_scope = BlockScope {
-                        locals: gen_params,
-                        globals: Vec::new(),
-                    };
-
-                    self.builder.insert_many(vec![
-                        // Push the base pointer
-                        asm!("push", "rbp"),
-                        // Set the base pointer to the stack pointer
-                        asm!("mov", "rbp", "rsp"),
-                    ]);
-
-                    self.builder.set_insert_point(InsertPoint {
-                        segment: SegmentKind::Text,
-                        loc: InsertLoc::SegmentEnd,
-                    });
-
-                    // Temp label to insert the stack size
-                    self.builder.insert_label("tmp_for_stack_size");
-
-                    for statement in body {
-                        self.statement(statement, &mut block_scope);
-                    }
-
-                    let insert = self.builder.get_insert_point();
-                    let locals_size: usize =
-                        block_scope.locals.iter().map(|(_, v)| v.ty.size()).sum();
-                    self.builder.set_insert_point(InsertPoint {
-                        segment: SegmentKind::Text,
-                        loc: InsertLoc::LabelStart("tmp_for_stack_size".into()),
-                    });
-
-                    self.builder.insert(asm!("sub", "rsp", locals_size));
-                    self.builder.delete_label("tmp_for_stack_size");
-
-                    let mut ret_blocks = self.builder.blocks_mut(|b| {
-                        if let Some(label) = &b.label {
-                            label.name.starts_with("tmp_return_block")
-                        } else {
-                            false
-                        }
-                    });
-
-                    let mut ret_block;
-                    loop {
-                        if let Some(next) = ret_blocks.pop() {
-                            ret_block = next;
-                        } else {
-                            break;
-                        }
-
-                        ret_block.code.insert(0, asm!("add", "rsp", locals_size));
-                        ret_block.label = None;
-                    }
-
-                    self.builder.set_insert_point(insert);
-                }
-                Extern {
-                    name,
-                    return_type: _,
-                    params: _,
-                } => {
-                    self.builder.set_insert_point(InsertPoint {
-                        segment: SegmentKind::Text,
-                        loc: InsertLoc::SegmentStart,
-                    });
-                    self.builder.insert(format!("extern {}\n", name));
-                }
-            }
-        }
-    }
-
     /// Gets the next id/name for a new block
-    fn next_block_id(&mut self, name: Option<&str>) -> String {
+    pub(super) fn next_block_id(&mut self, name: Option<&str>) -> String {
         let block = self.block_counter;
         self.block_counter += 1;
         let block_name = if let Some(name) = name {
@@ -425,7 +335,7 @@ impl<'gen> Generator<'gen> {
     }
 
     /// Gets an available register and marks it as in-use
-    fn get_register(&mut self) -> Option<Register> {
+    pub(super) fn get_register(&mut self) -> Option<Register> {
         for (reg, taken) in self.registers.iter_mut() {
             if !*taken {
                 *taken = true;
@@ -436,7 +346,7 @@ impl<'gen> Generator<'gen> {
     }
 
     /// Marks a register as free
-    fn free_register(&mut self, reg: Register) {
+    pub(super) fn free_register(&mut self, reg: Register) {
         self.registers
             .iter_mut()
             .find(|(r, _)| *r == reg)
@@ -444,308 +354,39 @@ impl<'gen> Generator<'gen> {
             .1 = true;
     }
 
+    pub(super) fn request_register(&mut self, reg: Register) -> Option<Register> {
+        let Some((reg, taken)) = self
+            .registers
+            .iter_mut()
+            .find(|(r, taken)| *r == reg && *taken == false) else {
+                return None;
+            };
+        *taken = true;
+        Some(*reg)
+    }
+
+    /// Cleans up registers from a block scope
+    pub fn cleanup(&mut self, scope: &mut BlockScope) {
+        scope.locals.iter().for_each(|(_, var)| {
+            if let VariableLocation::Register(reg) = var.location {
+                self.free_register(reg);
+            }
+        });
+    }
+
     /// Allocates space on the stack
-    fn stack_alloc(&mut self, size: usize, scope: &mut BlockScope) -> VariableLocation {
-        let offset: usize = scope.locals.iter().map(|(_, v)| v.ty.size()).sum();
+    pub(super) fn stack_alloc(&mut self, size: usize, scope: &mut BlockScope) -> VariableLocation {
+        let offset: usize = scope.fn_locals_size();
 
-        VariableLocation::Stack(offset + size)
+        VariableLocation::Stack((offset + size) as isize)
     }
 
-    /// Generates the assembly for an expression
-    pub fn expression(
-        &mut self,
-        expr: &tir::Expression,
-        scope: &mut BlockScope,
-    ) -> (VariableLocation, usize) {
-        match expr {
-            Expression::Literal { value, ty } => match self.get_register() {
-                Some(reg) => {
-                    match value {
-                        tir::Literal::Int(i) => {
-                            self.builder.insert(asm!("mov", reg.sized(ty.size()), *i));
-                        }
-                        tir::Literal::Bool(b) => {
-                            self.builder
-                                .insert(asm!("mov", reg.sized(ty.size()), *b as u64));
-                        }
-                        tir::Literal::Char(c) => {
-                            self.builder
-                                .insert(asm!("mov", reg.sized(ty.size()), *c as u64));
-                        }
-                        other => todo!("Implement codegen for literal {:?}", other),
-                    }
-                    (VariableLocation::Register(reg), ty.size())
-                }
-                None => {
-                    let alloc = self.stack_alloc(ty.size(), scope);
-                    match value {
-                        tir::Literal::Int(i) => {
-                            self.builder.insert(asm!(
-                                "mov",
-                                format!("{}", alloc.to_asm(ty.size())),
-                                *i
-                            ));
-                        }
-                        tir::Literal::Bool(b) => {
-                            self.builder.insert(asm!(
-                                "mov",
-                                format!("{}", alloc.to_asm(ty.size())),
-                                *b as u64
-                            ));
-                        }
-                        tir::Literal::Char(c) => {
-                            self.builder.insert(asm!(
-                                "mov",
-                                format!("{}", alloc.to_asm(ty.size())),
-                                *c as u64
-                            ));
-                        }
-                        other => todo!("Implement codegen for literal {:?}", other),
-                    }
-                    (alloc, ty.size())
-                }
-            },
-            Expression::Variable { name, ty } => {
-                let var = scope.locals.iter().find(|(n, _)| n == name);
-                if let Some((_, var)) = var {
-                    (var.location, var.ty.size())
-                } else {
-                    let var = scope.globals.iter().find(|(n, _)| n == name).unwrap().1;
-                    (var.location, var.ty.size())
-                }
-            }
-            Expression::Binary { lhs, rhs, op, ty } => {
-                let (lhs, lhs_size) = self.expression(lhs, scope);
-                let (rhs, rhs_size) = self.expression(rhs, scope);
-                let alloc = match self.get_register() {
-                    Some(reg) => VariableLocation::Register(reg),
-                    None => self.stack_alloc(ty.size(), scope),
-                };
-
-                match op {
-                    BinaryOperator::Add => {
-                        self.builder.insert_many(vec![
-                            asm!("mov", alloc.to_asm(ty.size()), lhs.to_asm(lhs_size)),
-                            asm!("add", alloc.to_asm(ty.size()), rhs.to_asm(rhs_size)),
-                        ]);
-                    }
-                    BinaryOperator::Lt => {
-                        self.builder.insert_many(vec![
-                            asm!("mov", alloc.to_asm(ty.size()), 1),
-                            asm!("cmp", lhs.to_asm(lhs_size), rhs.to_asm(rhs_size)),
-                            asm!("mov", lhs.to_asm(lhs_size), 0),
-                            asm!("cmovl", alloc.to_asm(lhs_size), lhs.to_asm(lhs_size)),
-                        ]);
-                    }
-                    _ => todo!("Implement binop {:?}", op),
-                }
-                (alloc, ty.size())
-            }
-            other => todo!("Implement codegen for expr {:?}", other),
-        }
-    }
-
-    /// Generates assembly for a statement
-    pub fn statement(&mut self, stmt: tir::Statement, scope: &mut BlockScope) {
-        match stmt {
-            tir::Statement::Return(v) => {
-                if let Some(v) = v {
-                    let (loc, size) = self.expression(&v, scope);
-                    self.builder.insert(asm!(
-                        "mov",
-                        Register::Rax.sized(size),
-                        format!("{}", loc.to_asm(size))
-                    ));
-                }
-
-                // Create a label to return to once the size of all locals is known
-                let id = self.next_block_id(Some("tmp_return_block"));
-                self.builder.set_insert_point(InsertPoint {
-                    segment: SegmentKind::Text,
-                    loc: InsertLoc::SegmentEnd,
-                });
-                self.builder.insert_label(&id);
-                self.builder
-                    .insert_many(vec![asm!("pop", "rbp"), asm!("ret")]);
-            }
-            tir::Statement::Expression(_) => todo!(),
-            tir::Statement::VariableDeclaration {
-                name,
-                ty,
-                initializer,
-            } => {
-                let size = ty.size();
-                let var = Variable {
-                    name: name.clone(),
-                    ty,
-                    location: {
-                        if let Some(init) = initializer {
-                            self.expression(&init, scope).0
-                        } else {
-                            if false
-                            /* size <= 8 */
-                            {
-                                match self.get_register() {
-                                    Some(reg) => VariableLocation::Register(reg),
-                                    None => self.stack_alloc(size, scope),
-                                }
-                            } else {
-                                self.stack_alloc(size, scope)
-                            }
-                        }
-                    },
-                };
-                scope.locals.push((name, var));
-            }
-            tir::Statement::VariableAssignment { name, op, value } => {
-                let (value, size) = self.expression(&value, scope);
-                let var = scope
-                    .locals
-                    .iter()
-                    .find(|(n, v)| if *n == name { true } else { false });
-                let var = if let Some((_, var)) = var {
-                    var
-                } else {
-                    scope.globals.iter().find(|(n, _)| *n == name).unwrap().1
-                };
-                match value {
-                    VariableLocation::Register(val_reg) => {
-                        match var.location {
-                            VariableLocation::Register(var_reg) => {
-                                self.builder.insert(asm!(
-                                    "mov",
-                                    var_reg.sized(size),
-                                    val_reg.sized(size)
-                                ));
-                            }
-                            VariableLocation::Stack(offset) => {
-                                self.builder.insert(asm!(
-                                    "mov",
-                                    format!("{} [rbp - {}]", asm_size(size), offset),
-                                    val_reg.sized(size)
-                                ));
-                            }
-                        }
-                        self.free_register(val_reg);
-                    }
-                    VariableLocation::Stack(val_offset) => match var.location {
-                        VariableLocation::Register(var_reg) => {
-                            self.builder.insert(asm!(
-                                "mov",
-                                var_reg.sized(size),
-                                format!("{} [rbp - {}]", asm_size(size), val_offset)
-                            ));
-                        }
-                        VariableLocation::Stack(var_offset) => {
-                            let tmp_reg = self.get_register().unwrap();
-                            self.builder.insert_many(vec![
-                                asm!("push", tmp_reg),
-                                asm!(
-                                    "mov",
-                                    tmp_reg.sized(size),
-                                    format!("{} [rbp - {}]", asm_size(size), val_offset)
-                                ),
-                                asm!(
-                                    "mov",
-                                    format!("{} [rbp - {}]", asm_size(size), var_offset),
-                                    tmp_reg.sized(size)
-                                ),
-                                asm!("pop", tmp_reg.sized(size)),
-                            ]);
-                            self.free_register(tmp_reg);
-                        }
-                    },
-                }
-            }
-            tir::Statement::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
-                let else_block = self.next_block_id(Some("else"));
-                let end_block = self.next_block_id(Some("if_end"));
-
-                let (cond, size) = self.expression(&condition, scope);
-                match cond {
-                    VariableLocation::Register(reg) => {
-                        self.builder
-                            .insert_many(vec![asm!("test", reg, reg), asm!("jz", else_block)]);
-                        self.free_register(reg);
-                    }
-                    VariableLocation::Stack(offset) => {
-                        let reg = self.get_register().unwrap();
-                        self.builder.insert_many(vec![
-                            asm!(
-                                "mov",
-                                reg.sized(size),
-                                format!("{} [rbp - {}]", asm_size(size), offset)
-                            ),
-                            asm!("test", reg, reg),
-                            asm!("jz", else_block),
-                        ]);
-                        self.free_register(reg);
-                    }
-                };
-
-                let mut then_scope = BlockScope {
-                    locals: Vec::new(),
-                    globals: {
-                        let mut globals = Vec::new();
-                        for (name, var) in scope.locals.iter() {
-                            globals.push((name.clone(), var));
-                        }
-                        for (name, var) in scope.globals.iter() {
-                            globals.push((name.clone(), var));
-                        }
-                        globals
-                    },
-                };
-                for statement in then_body {
-                    self.statement(statement, &mut then_scope);
-                }
-                self.builder.insert(asm!("jmp", end_block));
-
-                self.builder.insert_label(&else_block);
-                self.builder.set_insert_point(InsertPoint {
-                    segment: SegmentKind::Text,
-                    loc: InsertLoc::LabelEnd(else_block),
-                });
-
-                let mut else_scope = BlockScope {
-                    locals: Vec::new(),
-                    globals: {
-                        let mut globals = Vec::new();
-                        for (name, var) in scope.locals.iter() {
-                            globals.push((name.clone(), var));
-                        }
-                        for (name, var) in scope.globals.iter() {
-                            globals.push((name.clone(), var));
-                        }
-                        globals
-                    },
-                };
-                for statement in else_body {
-                    self.statement(statement, &mut else_scope);
-                }
-                self.builder.insert(asm!("jmp", end_block));
-
-                self.builder.insert_label(&end_block);
-                self.builder.set_insert_point(InsertPoint {
-                    segment: SegmentKind::Text,
-                    loc: InsertLoc::LabelEnd(end_block),
-                });
-            }
-            tir::Statement::Result(_) => todo!(),
-            tir::Statement::While { condition, body } => todo!(),
-            tir::Statement::For {
-                initializer,
-                condition,
-                increment,
-                body,
-            } => todo!(),
-            tir::Statement::Break => todo!(),
-            tir::Statement::Continue => todo!(),
-            tir::Statement::InlineAssembly(_) => todo!(),
+    /// Aligns a size to 8 bytes
+    pub(super) fn align_8(size: usize) -> usize {
+        if size % 8 == 0 {
+            size
+        } else {
+            size + (8 - (size % 8))
         }
     }
 }

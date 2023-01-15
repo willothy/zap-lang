@@ -1,6 +1,6 @@
 //! Asm builder
 
-use std::{fs, iter::Filter, path::PathBuf, vec::IntoIter};
+use std::{fs, path::PathBuf, ptr::null};
 
 /// Macro helper to format asm instructions
 #[macro_export]
@@ -83,6 +83,7 @@ impl Builder {
         }
     }
 
+    /// Get blocks from the current segment which match a predicate
     pub fn blocks_mut(&mut self, mut p: impl FnMut(&Block) -> bool) -> Vec<&mut Block> {
         let segment = match self.insert_point.segment {
             SegmentKind::Bss => &mut self.bss,
@@ -91,6 +92,17 @@ impl Builder {
         };
 
         segment.blocks.iter_mut().filter(|b| p(b)).collect()
+    }
+
+    /// Gets the first block in the current segment which matches a predicate
+    pub fn block_mut(&mut self, mut p: impl FnMut(&Block) -> bool) -> Option<&mut Block> {
+        let segment = match self.insert_point.segment {
+            SegmentKind::Bss => &mut self.bss,
+            SegmentKind::Text => &mut self.text,
+            SegmentKind::Data => &mut self.data,
+        };
+
+        segment.blocks.iter_mut().find(|b| p(b))
     }
 
     /// Add a label at the current insert point
@@ -123,18 +135,13 @@ impl Builder {
             }
             InsertLoc::LabelEnd(label_end) => {
                 let index = segment
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, b)| {
+                    .block_index(|b| {
                         b.label
                             .as_ref()
                             .map(|l| l.name == label_end)
                             .unwrap_or(false)
                     })
-                    .map(|(index, _)| index)
                     .unwrap();
-
                 segment.blocks.insert(
                     index + 1,
                     Block {
@@ -149,6 +156,22 @@ impl Builder {
         }
     }
 
+    /// Add a const string to the data segment
+    pub fn insert_const_string(&mut self, label: &str, value: &str, null_terminated: bool) {
+        self.data.blocks.push(Block {
+            label: Some(Label {
+                name: label.to_owned(),
+            }),
+            code: vec![asm!("db", {
+                let mut s = value.to_string();
+                if null_terminated {
+                    s.push('\0');
+                }
+                s
+            })],
+        });
+    }
+
     /// Insert a line of asm at the current insert point
     pub fn insert(&mut self, code: String) {
         let segment = match self.insert_point.segment {
@@ -158,7 +181,7 @@ impl Builder {
         };
         match self.insert_point.loc.clone() {
             InsertLoc::SegmentStart => {
-                if let Some(block) = segment.blocks.last_mut() {
+                if let Some(block) = segment.blocks.first_mut() {
                     block.code.insert(0, code);
                 } else {
                     segment.blocks.insert(
@@ -181,10 +204,8 @@ impl Builder {
                 }
             }
             InsertLoc::LabelStart(label) => {
-                let block = segment
-                    .blocks
-                    .iter_mut()
-                    .find(|block| {
+                let block = self
+                    .block_mut(|block| {
                         block
                             .label
                             .as_ref()
@@ -195,10 +216,8 @@ impl Builder {
                 block.code.insert(0, code);
             }
             InsertLoc::LabelEnd(label) => {
-                let block = segment
-                    .blocks
-                    .iter_mut()
-                    .find(|block| {
+                let block = self
+                    .block_mut(|block| {
                         block
                             .label
                             .as_ref()
@@ -296,22 +315,9 @@ pub struct Segment {
 }
 
 impl Segment {
-    pub fn block_mut(&mut self, label: &str) -> Option<&mut Block> {
-        self.blocks
-            .iter_mut()
-            .find(|b| b.label.as_ref().map(|l| l.name == label).unwrap_or(false))
-    }
-
-    pub fn block(&self, label: &str) -> Option<&Block> {
-        self.blocks
-            .iter()
-            .find(|b| b.label.as_ref().map(|l| l.name == label).unwrap_or(false))
-    }
-
-    pub fn block_idx(&self, label: &str) -> Option<usize> {
-        self.blocks
-            .iter()
-            .position(|b| b.label.as_ref().map(|l| l.name == label).unwrap_or(false))
+    /// Gets the index of the first block in the current segment which matches a predicate
+    pub fn block_index(&self, mut p: impl FnMut(&Block) -> bool) -> Option<usize> {
+        self.blocks.iter().position(|b| p(b))
     }
 }
 

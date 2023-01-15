@@ -51,7 +51,6 @@ pub struct TypeName {
 
 /// Statement represents a statement in the AST
 pub enum Statement {
-    InlineAssembly(String),
     Return(Option<Expression>),
     Result(Expression),
     Expression(Expression),
@@ -86,6 +85,9 @@ pub enum Statement {
 
 /// Expression represents an expression in the AST
 pub enum Expression {
+    InlineAssembly {
+        code: Vec<String>,
+    },
     Binary {
         lhs: Box<Expression>,
         rhs: Box<Expression>,

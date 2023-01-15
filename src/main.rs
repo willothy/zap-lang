@@ -1,12 +1,19 @@
 use std::{path::PathBuf, process::ExitCode};
 
-use self::{tir::Function, ty::PrimitiveType};
+use self::{
+    ops::{BinaryOperator, UnaryOperator},
+    ty::PrimitiveType,
+};
+
+use crate::ty::Type::*;
+use tir::{Expression::*, Function::*, Literal::*, Statement::*};
 
 mod ast;
 mod codegen;
 mod ops;
 mod tir;
 mod ty;
+mod util;
 
 fn main() -> ExitCode {
     let unit = tir::Unit {
@@ -14,60 +21,53 @@ fn main() -> ExitCode {
         path: PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("test.asm"),
         imports: Vec::new(),
         structs: Vec::new(),
-        functions: vec![Function::Definition {
-            name: "main".to_owned(),
-            return_type: ty::Type::Primitive(PrimitiveType::I32),
-            params: Vec::new(),
-            body: vec![
-                tir::Statement::VariableDeclaration {
-                    name: "a".to_owned(),
-                    ty: ty::Type::Primitive(PrimitiveType::I32),
-                    initializer: Some(tir::Expression::Literal {
-                        value: tir::Literal::Int(15),
-                        ty: ty::Type::Primitive(PrimitiveType::I32),
-                    }),
-                },
-                tir::Statement::VariableDeclaration {
-                    name: "b".to_owned(),
-                    ty: ty::Type::Primitive(PrimitiveType::I32),
-                    initializer: Some(tir::Expression::Literal {
-                        value: tir::Literal::Int(39),
-                        ty: ty::Type::Primitive(PrimitiveType::I32),
-                    }),
-                },
-                tir::Statement::VariableAssignment {
-                    name: "a".to_owned(),
-
-                    op: ops::AssignmentOperator::Assign,
-                    value: tir::Expression::Literal {
-                        value: tir::Literal::Int(25),
-                        ty: ty::Type::Primitive(PrimitiveType::I32),
-                    },
-                },
-                tir::Statement::If {
-                    condition: tir::Expression::Binary {
-                        lhs: Box::new(tir::Expression::Variable {
-                            name: "a".to_owned(),
-                            ty: ty::Type::Primitive(PrimitiveType::I32),
-                        }),
-                        rhs: Box::new(tir::Expression::Variable {
-                            name: "b".to_owned(),
-                            ty: ty::Type::Primitive(PrimitiveType::I32),
-                        }),
-                        op: ops::BinaryOperator::Lt,
-                        ty: ty::Type::Primitive(PrimitiveType::Bool),
-                    },
-                    then_body: vec![tir::Statement::Return(Some(tir::Expression::Variable {
-                        name: "a".to_owned(),
-                        ty: ty::Type::Primitive(PrimitiveType::I32),
-                    }))],
-                    else_body: vec![tir::Statement::Return(Some(tir::Expression::Variable {
-                        name: "b".to_owned(),
-                        ty: ty::Type::Primitive(PrimitiveType::I32),
-                    }))],
-                },
-            ],
-        }],
+        consts: Vec::new(),
+        functions: vec![
+            // Multiple lines!
+            Definition {
+                name: "main".to_owned(),
+                return_type: Primitive(PrimitiveType::I32),
+                params: Vec::new(),
+                body: vec![
+                    // MAKE IT MULTIPLE LINES!!
+                    Return(Some(Call {
+                        name: "write".to_owned(),
+                        args: vec![
+                            Literal {
+                                value: Str("Hello, world!\n".to_owned()),
+                                ty: Pointer(Box::new(Primitive(PrimitiveType::Char))),
+                            },
+                            Literal {
+                                value: Int(14),
+                                ty: Primitive(PrimitiveType::I32),
+                            },
+                        ],
+                        ty: Primitive(PrimitiveType::I32),
+                    })),
+                ],
+            },
+            Definition {
+                name: "write".to_owned(),
+                return_type: Primitive(PrimitiveType::I32),
+                params: Vec::new(),
+                body: vec![
+                    // MAKE IT MULTIPLE LINES!!
+                    Return(Some(InlineAssembly {
+                        code: vec![
+                            // write to stdout
+                            "mov rdx, rsi",
+                            "mov rsi, rdi", // move the string to rsi
+                            "mov rdi, 1",
+                            "mov rax, 1",
+                            "syscall",
+                        ]
+                        .iter()
+                        .map(|s| s.trim().to_string())
+                        .collect(),
+                    })),
+                ],
+            },
+        ],
     };
     let mut gen = codegen::Generator::new(unit);
     gen.generate();

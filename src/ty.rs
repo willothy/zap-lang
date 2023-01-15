@@ -29,7 +29,7 @@ pub enum Type {
 impl Type {
     pub fn size(&self) -> usize {
         match self {
-            Type::Function { .. } => panic!("Function type has no size"),
+            Type::Function { return_type, .. } => return_type.size(),
             Type::Primitive(p) => p.size(),
             Type::Pointer(_) => 8,
             Type::Array { size, element_type } => size * element_type.size(),

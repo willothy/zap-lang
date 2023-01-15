@@ -4,5 +4,7 @@ rm test.o
 chmod +x ./test
 ./test
 RES=$?
-rm ./test
+if [ -z "$1" ]; then
+    rm ./test
+fi
 echo "Result: $RES"

@@ -14,12 +14,20 @@ pub struct Unit<'tir> {
     pub path: PathBuf,
     pub imports: Vec<Import<'tir>>,
     pub structs: Vec<Struct>,
+    pub consts: Vec<Const>,
     pub functions: Vec<Function>,
 }
 
 #[derive(Debug)]
 pub struct Import<'tir> {
     pub unit: &'tir Unit<'tir>,
+}
+
+#[derive(Debug)]
+pub struct Const {
+    pub name: String,
+    pub ty: Type,
+    pub value: Expression,
 }
 
 #[derive(Debug)]
@@ -45,7 +53,6 @@ pub enum Function {
 
 #[derive(Debug)]
 pub enum Statement {
-    InlineAssembly(String),
     Return(Option<Expression>),
     Result(Expression),
     Expression(Expression),
@@ -81,6 +88,9 @@ pub enum Statement {
 /// Expression represents an expression in the AST
 #[derive(Debug)]
 pub enum Expression {
+    InlineAssembly {
+        code: Vec<String>,
+    },
     Binary {
         lhs: Box<Expression>,
         rhs: Box<Expression>,
@@ -111,6 +121,22 @@ pub enum Expression {
     },
 }
 
+impl Expression {
+    pub fn ty(&self) -> &Type {
+        match self {
+            Expression::Binary { ty, .. } => ty,
+            Expression::Unary { ty, .. } => ty,
+            Expression::Call { ty, .. } => ty,
+            Expression::Variable { ty, .. } => ty,
+            Expression::Literal { ty, .. } => ty,
+            Expression::AsExpr { ty, .. } => ty,
+            Expression::InlineAssembly { code } => {
+                panic!("Cannot get type of inline assembly: {:?}", code)
+            }
+        }
+    }
+}
+
 /// Literal represents a literal value
 #[derive(Debug)]
 pub enum Literal {
@@ -118,5 +144,5 @@ pub enum Literal {
     Float(f64),
     Bool(bool),
     Char(char),
-    String(String),
+    Str(String),
 }

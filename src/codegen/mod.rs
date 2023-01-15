@@ -2,5 +2,6 @@
 
 mod builder;
 mod gen;
+mod generators;
 
 pub use gen::Generator;
