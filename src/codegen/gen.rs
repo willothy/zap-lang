@@ -291,7 +291,7 @@ impl<'gen> Generator<'gen> {
             builder: Builder::new(unit.path.clone()),
             unit,
             registers: vec![
-                (Register::Rax, false),
+                (Register::Rax, true), // RAX is used for return values
                 (Register::Rbx, false),
                 (Register::Rcx, false),
                 (Register::Rdx, false),
@@ -310,6 +310,43 @@ impl<'gen> Generator<'gen> {
             ],
             block_counter: 0,
         }
+    }
+
+    pub fn build_move(
+        &mut self,
+        dest: VariableLocation,
+        src: VariableLocation,
+        size: usize,
+    ) -> VariableLocation {
+        match dest {
+            VariableLocation::Register(dest_reg) => {
+                self.builder.insert(format!(
+                    "mov {}, {}\n",
+                    dest_reg.sized(size),
+                    src.to_asm(size)
+                ));
+            }
+            VariableLocation::Stack(_) => {
+                let tmp_reg = self.get_register().unwrap();
+                self.builder.insert(format!(
+                    "mov {}, {}\n",
+                    tmp_reg.sized(size),
+                    src.to_asm(size)
+                ));
+                self.builder.insert(format!(
+                    "mov {}, {}\n",
+                    dest.to_asm(size),
+                    tmp_reg.sized(size)
+                ));
+                self.free_register(tmp_reg);
+            }
+        }
+        dest
+    }
+
+    /// Adds a comment to the assembly
+    pub fn comment(&mut self, comment: &str) {
+        self.builder.insert(format!("; {}\n", comment));
     }
 
     /// Generates the assembly for the unit

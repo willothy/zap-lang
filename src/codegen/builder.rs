@@ -248,8 +248,8 @@ impl Builder {
 
         output.push_str("segment .text\n");
         // Setup entry point
-        output.push_str("global _start\n");
-        output.push_str("_start:\n");
+        output.push_str("global zip_main\n");
+        output.push_str("zip_main:\n");
         output.push_str(&asm!("call", "main"));
         output.push_str(&asm!("mov", "rdi", "rax"));
         output.push_str(&asm!("mov", "rax", 60));

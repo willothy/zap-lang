@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::{
     asm,
     codegen::{
@@ -5,6 +7,7 @@ use crate::{
         gen::{BlockScope, Register, VariableLocation},
         Generator,
     },
+    function,
     ops::{BinaryOperator, UnaryOperator},
     tir::{Expression, Literal},
     ty::Type,
@@ -45,7 +48,7 @@ impl<'gen> Generator<'gen> {
             Expression::Binary { lhs, rhs, op, ty } => {
                 self.binary(lhs, rhs, op, ty, place_in, scope)
             }
-            Expression::Call { name, args, ty } => self.call(name, args, ty, scope),
+            Expression::Call { name, args, ty } => self.call(name, args, ty, place_in, scope),
             Expression::Unary { expr, op, ty } => self.unary(expr, op, ty, place_in, scope),
             Expression::InlineAssembly { code } => self.inline_asm(code, place_in),
             Expression::AsExpr { expr, ty } => todo!(),
@@ -110,14 +113,16 @@ impl<'gen> Generator<'gen> {
                 let (expr_loc, size) = self.expression(expr, None, scope);
                 match expr_loc {
                     VariableLocation::Register(reg) => {
+                        self.builder.insert("; Deref: Register\n".to_owned());
                         self.builder
                             .insert(asm!("mov", loc.to_asm(size), reg.deref()));
                     }
                     VariableLocation::Stack(_) => {
+                        self.builder.insert("; Deref: Stack\n".to_owned());
                         let reg = self.get_register().unwrap();
                         self.builder.insert_many(vec![
                             asm!("mov", reg.sized(size), expr_loc.to_asm(size)),
-                            asm!("mov", loc.to_asm(size), reg.sized(size)),
+                            asm!("mov", loc.to_asm(size), reg.deref()),
                         ]);
                         self.free_register(reg);
                     }
@@ -127,14 +132,29 @@ impl<'gen> Generator<'gen> {
             UnaryOperator::Ref => {
                 self.builder.insert("; Ref\n".to_owned());
                 let expr_stack_alloc = self.stack_alloc(ty.size(), scope);
-                let (expr_loc, size) = self.expression(expr, Some(expr_stack_alloc), scope);
+                let (expr_loc, size) = {
+                    if let Expression::Variable { name, .. } = &**expr {
+                        let var = scope.locals.iter().find(|(n, _)| n == name);
+                        let res = if let Some((_, var)) = var {
+                            (var.location, var.ty.size())
+                        } else {
+                            let var = &scope.globals.iter().find(|(n, _)| n == name).unwrap().1;
+                            (var.location, var.ty.size())
+                        };
+                        res
+                    } else {
+                        self.expression(expr, Some(expr_stack_alloc), scope)
+                    }
+                };
                 match expr_loc {
                     VariableLocation::Stack(offset) => match loc {
                         VariableLocation::Register(reg) => {
+                            self.comment(&format!("Ref: Stack -> Register"));
                             self.builder
                                 .insert(asm!("lea", reg.sized(8), expr_loc.to_asm(8)));
                         }
                         VariableLocation::Stack(_) => {
+                            self.comment(&format!("Ref: Stack -> Stack"));
                             let reg = self.get_register().unwrap();
                             self.builder.insert_many(vec![
                                 asm!("lea", reg.sized(8), format!("[rbp - {}]", offset)),
@@ -264,14 +284,25 @@ impl<'gen> Generator<'gen> {
                     .insert(asm!("mov", reg.sized(res.1), res.0.to_asm(res.1)));
                 res.0 = copy_to.unwrap();
             }
-            Some(VariableLocation::Stack(_)) => {
-                self.builder.insert(asm!(
-                    "mov",
-                    copy_to.unwrap().to_asm(res.1),
-                    res.0.to_asm(res.1)
-                ));
-                res.0 = copy_to.unwrap();
-            }
+            Some(VariableLocation::Stack(_)) => match res.0 {
+                VariableLocation::Register(reg) => {
+                    self.builder.insert(asm!(
+                        "mov",
+                        copy_to.unwrap().to_asm(res.1),
+                        res.0.to_asm(res.1)
+                    ));
+                    res.0 = copy_to.unwrap();
+                }
+                VariableLocation::Stack(_) => {
+                    let tmp_reg = self.get_register().unwrap();
+                    self.builder.insert_many(vec![
+                        // align
+                        asm!("mov", tmp_reg.sized(res.1), res.0.to_asm(res.1)),
+                        asm!("mov", copy_to.unwrap().to_asm(res.1), tmp_reg.sized(res.1)),
+                    ]);
+                    res.0 = copy_to.unwrap();
+                }
+            },
             None => {}
         }
         res
@@ -290,11 +321,41 @@ impl<'gen> Generator<'gen> {
         let (lhs, lhs_size) = self.expression(lhs, None, scope);
         let (rhs, rhs_size) = self.expression(rhs, None, scope);
 
+        let mut used_tmp = false;
+        let rhs = if matches!(rhs, VariableLocation::Stack(_))
+            && matches!(lhs, VariableLocation::Stack(_))
+        {
+            used_tmp = true;
+            let tmp_reg = self.get_register().unwrap();
+            self.build_move(VariableLocation::Register(tmp_reg), rhs, rhs_size)
+        } else {
+            rhs
+        };
+
         match op {
             BinaryOperator::Add => {
                 self.builder.insert_many(vec![
                     asm!("mov", alloc.to_asm(ty.size()), lhs.to_asm(lhs_size)),
                     asm!("add", alloc.to_asm(ty.size()), rhs.to_asm(rhs_size)),
+                ]);
+            }
+            BinaryOperator::Sub => {
+                self.builder.insert_many(vec![
+                    asm!("mov", alloc.to_asm(ty.size()), lhs.to_asm(lhs_size)),
+                    asm!("sub", alloc.to_asm(ty.size()), rhs.to_asm(rhs_size)),
+                ]);
+            }
+            BinaryOperator::Mul => {
+                self.builder.insert_many(vec![
+                    asm!("mov", alloc.to_asm(ty.size()), lhs.to_asm(lhs_size)),
+                    asm!("imul", alloc.to_asm(ty.size()), rhs.to_asm(rhs_size)),
+                ]);
+            }
+            BinaryOperator::Div => {
+                self.builder.insert_many(vec![
+                    asm!("mov", alloc.to_asm(ty.size()), lhs.to_asm(lhs_size)),
+                    asm!("cqo"),
+                    asm!("idiv", rhs.to_asm(rhs_size)),
                 ]);
             }
             BinaryOperator::Lt => {
@@ -307,6 +368,11 @@ impl<'gen> Generator<'gen> {
             }
             _ => todo!("Implement binop {:?}", op),
         }
+        if let VariableLocation::Register(reg) = rhs {
+            if used_tmp {
+                self.free_register(reg);
+            }
+        }
         (alloc, ty.size())
     }
 
@@ -315,6 +381,7 @@ impl<'gen> Generator<'gen> {
         name: &str,
         args: &[Expression],
         ty: &Type,
+        place_in: Option<VariableLocation>,
         scope: &mut BlockScope,
     ) -> (VariableLocation, usize) {
         let mut arg_locs = Vec::new();
@@ -330,9 +397,7 @@ impl<'gen> Generator<'gen> {
             if num >= args.len() {
                 break;
             }
-            let reg = self
-                .request_register(*reg)
-                .expect("Register is required to be free");
+            let reg = *reg;
             let (arg, _) =
                 self.expression(&args[num], Some(VariableLocation::Register(reg)), scope);
             arg_locs.push(arg);
@@ -348,9 +413,18 @@ impl<'gen> Generator<'gen> {
         }
 
         self.builder.insert(asm!("call", name));
-        let output = self
-            .request_register(Register::Rax)
-            .expect("Rax is required to be free for function calls");
-        (VariableLocation::Register(output), ty.size())
+        let output = Register::Rax; /* self
+                                    .request_register(Register::Rax)
+                                    .expect("Rax is required to be free for function calls"); */
+        if let Some(place_in) = place_in {
+            self.builder.insert(asm!(
+                "mov",
+                place_in.to_asm(ty.size()),
+                output.sized(ty.size())
+            ));
+            (place_in, ty.size())
+        } else {
+            (VariableLocation::Register(output), ty.size())
+        }
     }
 }

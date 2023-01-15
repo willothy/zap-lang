@@ -79,7 +79,24 @@ impl<'gen> Generator<'gen> {
             ty,
             location: {
                 if let Some(init) = initializer {
-                    self.expression(&init, None, scope).0
+                    let init = self.expression(&init, None, scope).0;
+                    let alloc = self.stack_alloc(size, scope);
+                    match init {
+                        VariableLocation::Register(reg) => {
+                            self.builder
+                                .insert(asm!("mov", alloc.to_asm(size), reg.sized(size)));
+                            self.free_register(reg);
+                        }
+                        VariableLocation::Stack(_) => {
+                            let tmp_reg = self.get_register().unwrap();
+                            self.builder.insert_many(vec![
+                                asm!("mov", tmp_reg.sized(size), init.to_asm(size)),
+                                asm!("mov", alloc.to_asm(size), tmp_reg.sized(size)),
+                            ]);
+                            self.free_register(tmp_reg);
+                        }
+                    }
+                    alloc
                 } else {
                     if size <= 8 {
                         // TODO: Should I allocate locals in registers if possible?
