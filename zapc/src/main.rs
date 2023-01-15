@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
-use zap_backend::codegen::Generator;
-use zap_backend::ops;
-use zap_backend::tir::Expression::*;
-use zap_backend::tir::Function::*;
-use zap_backend::tir::Literal::*;
-use zap_backend::tir::Statement::*;
-use zap_backend::tir::Unit;
-use zap_backend::ty::PrimitiveType;
-use zap_backend::ty::Type::*;
+use backend::codegen::Generator;
+use backend::ops;
+use backend::tir::Expression::*;
+use backend::tir::Function::*;
+use backend::tir::Literal::*;
+use backend::tir::Statement::*;
+use backend::tir::Unit;
+use backend::ty::PrimitiveType;
+use backend::ty::Type::*;
 
 pub fn main() {
     let unit = Unit {
