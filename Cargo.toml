@@ -1,20 +1,7 @@
-[package]
-name = "zip-lang"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+name = "zap-lang"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[lib]
-name = "libzip"
-path = "src/lib.rs"
-
-[[bin]]
-name = "zip-lang"
-path = "src/main.rs"
-
-[dependencies]
-snailquote = "0.3.1"
-
-[dev-dependencies]
-test_bin = "0.4.0"
+members = [
+    "zap_backend",
+    "zapc"
+]

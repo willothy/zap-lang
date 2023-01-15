@@ -1,6 +1,6 @@
 //! Asm builder
 
-use std::{fs, path::PathBuf, ptr::null};
+use std::{fs, path::PathBuf};
 
 /// Macro helper to format asm instructions
 #[macro_export]

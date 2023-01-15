@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
-use libzip::ty::Type::*;
-use libzip::{ops, tir};
-use libzip::{
+use tir::{Expression::*, Function::*, Literal::*, Statement::*};
+use zap_backend::ty::Type::*;
+use zap_backend::{ops, tir};
+use zap_backend::{
     ops::{BinaryOperator, UnaryOperator},
     ty::PrimitiveType,
 };
-use tir::{Expression::*, Function::*, Literal::*, Statement::*};
 
 macro_rules! function {
     () => {{
@@ -22,7 +22,7 @@ macro_rules! function {
 #[cfg(test)]
 fn runner(
     name: &str,
-    unit: libzip::tir::Unit,
+    unit: zap_backend::tir::Unit,
     expected_out: &str,
     expected_ret: i32,
     args: Vec<&str>,
@@ -33,7 +33,7 @@ fn runner(
     unit.path = tmpdir.join("test.asm");
     std::fs::create_dir_all(unit.path.parent().unwrap()).unwrap();
     println!("path: {:?}", unit.path);
-    let mut gen = libzip::codegen::Generator::new(unit);
+    let mut gen = zap_backend::codegen::Generator::new(unit);
     gen.generate();
     let _output = gen.builder.finalize();
     gen.builder.write();
