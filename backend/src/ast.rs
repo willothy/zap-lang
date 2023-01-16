@@ -15,6 +15,41 @@ pub struct Unit {
     pub functions: Vec<Function>,
 }
 
+impl Unit {
+    pub fn new(
+        name: String,
+        path: PathBuf,
+        imports: Vec<Import>,
+        structs: Vec<Struct>,
+        functions: Vec<Function>,
+    ) -> Self {
+        Self {
+            name,
+            path,
+            imports,
+            structs,
+            functions,
+        }
+    }
+
+    pub fn new_empty(name: String, path: PathBuf) -> Self {
+        Self {
+            name,
+            path,
+            imports: Vec::new(),
+            structs: Vec::new(),
+            functions: Vec::new(),
+        }
+    }
+}
+
+/// Generalized utility enum for top level items
+pub enum Item {
+    Import(Import),
+    Struct(Struct),
+    Function(Function),
+}
+
 /// Import represents an import statement, with a path and a name
 pub struct Import {
     pub name: String,

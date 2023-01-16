@@ -2,3 +2,4 @@
 ./test.asm
 ./test.sh
 ./test
+./test.o
