@@ -43,15 +43,15 @@ impl<'gen> Generator<'gen> {
         scope: &mut BlockScope,
     ) -> (VariableLocation, usize) {
         match expr {
-            Expression::Literal { value, ty } => self.literal(value, ty, place_in, scope),
+            Expression::Literal { value, ty, .. } => self.literal(value, ty, place_in, scope),
             Expression::Variable { name, .. } => self.variable(name, place_in, scope),
-            Expression::Binary { lhs, rhs, op, ty } => {
-                self.binary(lhs, rhs, op, ty, place_in, scope)
-            }
-            Expression::Call { name, args, ty } => self.call(name, args, ty, place_in, scope),
-            Expression::Unary { expr, op, ty } => self.unary(expr, op, ty, place_in, scope),
-            Expression::InlineAssembly { code } => self.inline_asm(code, place_in),
-            Expression::AsExpr { expr, ty } => todo!(),
+            Expression::Binary {
+                lhs, rhs, op, ty, ..
+            } => self.binary(lhs, rhs, op, ty, place_in, scope),
+            Expression::Call { name, args, ty, .. } => self.call(name, args, ty, place_in, scope),
+            Expression::Unary { expr, op, ty, .. } => self.unary(expr, op, ty, place_in, scope),
+            Expression::InlineAssembly { code, .. } => self.inline_asm(code, place_in),
+            Expression::AsExpr { expr, ty, .. } => todo!(),
             #[allow(unreachable_patterns)]
             other => todo!("Implement codegen for expr {:?}", other),
         }

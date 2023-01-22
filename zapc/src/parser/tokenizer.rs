@@ -15,7 +15,7 @@ use nom_locate::LocatedSpan;
 
 type Span<'a> = LocatedSpan<&'a str, &'a str>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
     pub kind: TokenKind,
     pub loc: TokenLoc,
@@ -40,6 +40,12 @@ pub struct TokenLoc {
     pub file: String,
     pub line: usize,
     pub col: usize,
+}
+
+impl Into<(String, usize, usize)> for TokenLoc {
+    fn into(self) -> (String, usize, usize) {
+        (self.file, self.line, self.col)
+    }
 }
 
 impl<'a> From<&Span<'a>> for TokenLoc {
@@ -97,7 +103,7 @@ impl<'a> From<(Symbol, TokenLoc)> for Token {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TokenKind {
     Identifier(String),
     Keyword(Keyword),
@@ -107,7 +113,7 @@ pub enum TokenKind {
     Comment,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Symbol {
     OpenParen,
     CloseParen,
@@ -133,7 +139,7 @@ pub enum Symbol {
     Ellipsis,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Keyword {
     Function,
     Extern,
@@ -149,7 +155,7 @@ pub enum Keyword {
     Import,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Literal {
     Integer(i64),
     Float(f64),
@@ -158,14 +164,14 @@ pub enum Literal {
     Bool(bool),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Operator {
     Assignment(AssignmentOp),
     Binary(BinaryOp),
     Unary(UnaryOp),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AssignmentOp {
     Assign,
     AddAssign,
@@ -180,7 +186,7 @@ pub enum AssignmentOp {
     ShrAssign,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -202,7 +208,7 @@ pub enum BinaryOp {
     Ge,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UnaryOp {
     LogNot,
     Not,

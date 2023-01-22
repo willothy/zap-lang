@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use crate::{
+    ast::NodeLocTriple,
     ops::{AssignmentOperator, BinaryOperator, UnaryOperator},
     ty::Type,
 };
@@ -21,6 +22,7 @@ pub struct Unit<'tir> {
 #[derive(Debug)]
 pub struct Import<'tir> {
     pub unit: &'tir Unit<'tir>,
+    pub loc: NodeLocTriple,
 }
 
 #[derive(Debug)]
@@ -28,12 +30,14 @@ pub struct Const {
     pub name: String,
     pub ty: Type,
     pub value: Expression,
+    pub loc: NodeLocTriple,
 }
 
 #[derive(Debug)]
 pub struct Struct {
     pub name: String,
     pub fields: Vec<(String, Type)>,
+    pub loc: NodeLocTriple,
 }
 
 #[derive(Debug)]
@@ -43,46 +47,66 @@ pub enum Function {
         return_type: Type,
         params: Vec<(String, Type)>,
         body: Vec<Statement>,
+        loc: NodeLocTriple,
     },
     Extern {
         name: String,
         return_type: Type,
         params: Vec<(String, Type)>,
+        loc: NodeLocTriple,
     },
 }
 
 #[derive(Debug)]
 pub enum Statement {
-    Return(Option<Expression>),
-    Result(Expression),
-    Expression(Expression),
+    Return {
+        value: Option<Expression>,
+        loc: NodeLocTriple,
+    },
+    Result {
+        value: Expression,
+        loc: NodeLocTriple,
+    },
+    Expression {
+        expr: Expression,
+        loc: NodeLocTriple,
+    },
     VariableDeclaration {
         name: String,
         ty: Type,
         initializer: Option<Expression>,
+        loc: NodeLocTriple,
     },
     VariableAssignment {
         name: String,
         op: AssignmentOperator,
         value: Expression,
+        loc: NodeLocTriple,
     },
     If {
         condition: Expression,
         then_body: Vec<Statement>,
         else_body: Vec<Statement>,
+        loc: NodeLocTriple,
     },
     While {
         condition: Expression,
         body: Vec<Statement>,
+        loc: NodeLocTriple,
     },
     For {
         initializer: Option<Box<Statement>>,
         condition: Option<Expression>,
         increment: Option<Expression>,
         body: Vec<Statement>,
+        loc: NodeLocTriple,
     },
-    Break,
-    Continue,
+    Break {
+        loc: NodeLocTriple,
+    },
+    Continue {
+        loc: NodeLocTriple,
+    },
 }
 
 /// Expression represents an expression in the AST
@@ -90,34 +114,41 @@ pub enum Statement {
 pub enum Expression {
     InlineAssembly {
         code: Vec<String>,
+        loc: NodeLocTriple,
     },
     Binary {
         lhs: Box<Expression>,
         rhs: Box<Expression>,
         op: BinaryOperator,
         ty: Type,
+        loc: NodeLocTriple,
     },
     Unary {
         expr: Box<Expression>,
         op: UnaryOperator,
         ty: Type,
+        loc: NodeLocTriple,
     },
     Call {
         name: String,
         args: Vec<Expression>,
         ty: Type,
+        loc: NodeLocTriple,
     },
     Variable {
         name: String,
         ty: Type,
+        loc: NodeLocTriple,
     },
     Literal {
         value: Literal,
         ty: Type,
+        loc: NodeLocTriple,
     },
     AsExpr {
         expr: Box<Expression>,
         ty: Type,
+        loc: NodeLocTriple,
     },
 }
 
@@ -130,7 +161,7 @@ impl Expression {
             Expression::Variable { ty, .. } => ty,
             Expression::Literal { ty, .. } => ty,
             Expression::AsExpr { ty, .. } => ty,
-            Expression::InlineAssembly { code } => {
+            Expression::InlineAssembly { code, .. } => {
                 panic!("Cannot get type of inline assembly: {:?}", code)
             }
         }

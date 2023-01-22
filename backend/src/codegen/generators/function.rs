@@ -21,11 +21,13 @@ impl<'gen> Generator<'gen> {
                     return_type,
                     params,
                     body,
+                    ..
                 } => self.function_def(&name, &return_type, params, body),
                 Extern {
                     name,
                     return_type,
                     params,
+                    ..
                 } => self.extern_fn(&name, &return_type, &params),
             }
         }

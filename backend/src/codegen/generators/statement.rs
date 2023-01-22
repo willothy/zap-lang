@@ -15,8 +15,8 @@ impl<'gen> Generator<'gen> {
     /// Generates assembly for a statement
     pub fn statement(&mut self, stmt: tir::Statement, scope: &mut BlockScope) {
         match stmt {
-            tir::Statement::Return(v) => self.return_stmt(v, scope),
-            tir::Statement::Expression(expr) => {
+            tir::Statement::Return { value, .. } => self.return_stmt(value, scope),
+            tir::Statement::Expression { expr, .. } => {
                 let loc = self.expression(&expr, None, scope).0;
                 if let VariableLocation::Register(reg) = loc {
                     self.free_register(reg);
@@ -26,20 +26,22 @@ impl<'gen> Generator<'gen> {
                 name,
                 ty,
                 initializer,
+                ..
             } => self.var_decl(name, ty, initializer, scope),
-            tir::Statement::VariableAssignment { name, op, value } => {
-                self.var_assign(name, op, value, scope)
-            }
+            tir::Statement::VariableAssignment {
+                name, op, value, ..
+            } => self.var_assign(name, op, value, scope),
             tir::Statement::If {
                 condition,
                 then_body,
                 else_body,
+                ..
             } => self.if_stmt(condition, then_body, else_body, scope),
-            tir::Statement::Result(_) => todo!(),
+            tir::Statement::Result { value: _, .. } => todo!(),
             tir::Statement::While { .. } => todo!(),
             tir::Statement::For { .. } => todo!(),
-            tir::Statement::Break => todo!(),
-            tir::Statement::Continue => todo!(),
+            tir::Statement::Break { .. } => todo!(),
+            tir::Statement::Continue { .. } => todo!(),
         }
     }
 
